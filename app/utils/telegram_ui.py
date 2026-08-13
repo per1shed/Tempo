@@ -54,7 +54,10 @@ async def show_screen(
     chat_id = msg.chat.id
 
     if user_settings and reply_markup is not None:
-        await clear_keyboard(bot, chat_id, user_settings.last_kb_message_id)
+        # не снимаем кнопки с сообщения, которое сейчас редактируем
+        prev = user_settings.last_kb_message_id
+        if prev and prev != msg.message_id:
+            await clear_keyboard(bot, chat_id, prev)
 
     # Фото / медиа — только новое сообщение
     if msg.photo or msg.video or msg.document or msg.animation:

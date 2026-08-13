@@ -12,7 +12,6 @@ from app.handlers import setup_routers
 from app.middlewares import AccessMiddleware, DbSessionMiddleware
 from app.models import User, UserSettings
 from app.scheduler import SchedulerService
-from app.services.ai import GeminiService
 from app.utils.logging import get_logger, setup_logging
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -21,6 +20,9 @@ from sqlalchemy.orm import selectinload
 BOT_COMMANDS = [
     BotCommand(command="start", description="Главное меню"),
     BotCommand(command="menu", description="Открыть меню"),
+    BotCommand(command="physical", description="Физическое состояние"),
+    BotCommand(command="moral", description="Моральное состояние"),
+    BotCommand(command="state", description="Состояние и график"),
     BotCommand(command="stopwatch", description="Секундомер"),
     BotCommand(command="settings", description="Настройки"),
 ]
@@ -81,14 +83,11 @@ async def main() -> None:
     )
     dp = Dispatcher(storage=MemoryStorage())
 
-    gemini = GeminiService(settings.gemini_keys(), settings.gemini_model)
-    dp["gemini"] = gemini
-
     dp.update.middleware(DbSessionMiddleware())
     dp.update.middleware(AccessMiddleware())
     dp.include_router(setup_routers())
 
-    scheduler = SchedulerService(bot, gemini)
+    scheduler = SchedulerService(bot)
 
     @dp.startup()
     async def _startup() -> None:
@@ -99,7 +98,6 @@ async def main() -> None:
             "bot_started",
             username=me.username,
             admin_id=settings.admin_id,
-            gemini_keys=len(settings.gemini_keys()),
         )
 
     @dp.shutdown()

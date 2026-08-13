@@ -48,6 +48,11 @@ class User(Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
+    state_checkins: Mapped[list["StateCheckin"]] = relationship(
+        "StateCheckin",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
 
 class UserSettings(Base):
@@ -137,6 +142,30 @@ class StopwatchState(Base):
     user: Mapped["User"] = relationship("User", back_populates="stopwatch")
 
 
+class StateCheckin(Base):
+    """Запись самочувствия (каждая отметка — отдельная строка, история не затирается)."""
+
+    __tablename__ = "state_checkins"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    logged_on: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    # morning | evening
+    period: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    physical: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    moral: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="state_checkins")
+
+
 class MotivationQuote(Base):
     """Пул мотивационных цитат для fallback и ротации."""
 
@@ -151,7 +180,7 @@ class MotivationQuote(Base):
     theme: Mapped[str] = mapped_column(String(32), default="general", nullable=False, index=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     text_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    # seed | ai | ai_saved
+    # seed
     source: Mapped[str] = mapped_column(String(16), default="seed", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     use_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

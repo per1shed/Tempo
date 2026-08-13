@@ -60,6 +60,13 @@ async def init_db() -> None:
                 "ADD COLUMN IF NOT EXISTS last_block_key VARCHAR(64)"
             )
         )
+        # История самочувствия: убираем unique (утро/вечер больше не перезаписываются)
+        await conn.execute(
+            text(
+                "ALTER TABLE state_checkins "
+                "DROP CONSTRAINT IF EXISTS uq_state_user_day_period"
+            )
+        )
 
 
 async def close_db() -> None:

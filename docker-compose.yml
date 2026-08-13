@@ -31,7 +31,6 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./backups:/app/backups
-      - ./assets:/app/assets
     depends_on:
       db:
         condition: service_healthy

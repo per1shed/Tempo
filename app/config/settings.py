@@ -17,11 +17,6 @@ class Settings(BaseSettings):
     bot_token: str = Field(..., alias="BOT_TOKEN")
     admin_id: int = Field(..., alias="ADMIN_ID")
 
-    # Comma-separated Gemini keys (legacy env name OPENAI_API_KEY)
-    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
-    gemini_api_keys: str = Field(default="", alias="GEMINI_API_KEYS")
-    gemini_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_MODEL")
-
     database_url: str = Field(
         default="postgresql+asyncpg://tempo:tempo@localhost:5433/tempo",
         alias="DATABASE_URL",
@@ -48,16 +43,11 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     logs_dir: Path = Field(default=BASE_DIR / "logs")
     backups_dir: Path = Field(default=BASE_DIR / "backups")
-    assets_dir: Path = Field(default=BASE_DIR / "assets")
 
     @field_validator("admin_id", mode="before")
     @classmethod
     def _parse_admin(cls, value: object) -> int:
         return int(str(value).strip())
-
-    def gemini_keys(self) -> list[str]:
-        raw = self.gemini_api_keys or self.openai_api_key
-        return [k.strip() for k in raw.replace(";", ",").split(",") if k.strip()]
 
 
 @lru_cache

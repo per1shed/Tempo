@@ -1,6 +1,7 @@
 from app.models.entities import (
     BlockLog,
     MotivationQuote,
+    StateCheckin,
     StopwatchState,
     User,
     UserSettings,
@@ -10,6 +11,7 @@ from app.models.entities import (
 __all__ = [
     "BlockLog",
     "MotivationQuote",
+    "StateCheckin",
     "StopwatchState",
     "User",
     "UserSettings",

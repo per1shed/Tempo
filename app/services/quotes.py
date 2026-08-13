@@ -3,14 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import random
-import re
 from pathlib import Path
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import MotivationQuote
-from app.services.ai import GeminiService
 from app.utils.datetime_utils import now
 from app.utils.logging import get_logger
 
@@ -18,12 +16,10 @@ logger = get_logger(__name__)
 
 SEED_PATH = Path(__file__).resolve().parent.parent / "data" / "motivation_seed.json"
 
-# Ночное обновление
-NIGHTLY_ADD = 12
+# Ночная ротация пула (без AI)
 NIGHTLY_RETIRE = 8
 NIGHTLY_REACTIVATE = 6
 MIN_ACTIVE_BY_KIND = {"morning": 60, "hourly": 50, "rest": 40}
-
 
 HARD_FALLBACK = {
     "morning": "Дисциплина сегодня = свобода завтра.",
@@ -106,7 +102,6 @@ async def pick_quote(
     )
     candidates = list(result.scalars().all())
     if not candidates:
-        # fallback: любой kind, потом hard
         result = await session.execute(
             select(MotivationQuote)
             .where(MotivationQuote.is_active.is_(True))
@@ -126,123 +121,14 @@ async def pick_quote(
     return quote.text
 
 
-async def save_quote_if_new(
-    session: AsyncSession,
-    *,
-    text: str,
-    kind: str,
-    theme: str = "ai",
-    source: str = "ai_saved",
-) -> bool:
-    """Сохраняет удачный AI-текст в пул (без дублей)."""
-    text = _normalize(text)
-    if len(text) < 25 or len(text) > 1200:
-        return False
-    if kind not in {"morning", "hourly", "rest"}:
-        return False
-    h = _hash_text(text, kind=kind)
-    exists = await session.execute(
-        select(MotivationQuote.id).where(MotivationQuote.text_hash == h).limit(1)
-    )
-    if exists.scalar_one_or_none() is not None:
-        return False
-    session.add(
-        MotivationQuote(
-            kind=kind,
-            theme=theme,
-            text=text,
-            text_hash=h,
-            source=source,
-            is_active=True,
-        )
-    )
-    await session.flush()
-    return True
-
-
-def _parse_ai_quote_list(raw: str) -> list[str]:
-    """Достаёт список цитат из ответа модели."""
-    text = (raw or "").strip()
-    if not text:
-        return []
-    # JSON array
-    try:
-        start = text.find("[")
-        end = text.rfind("]")
-        if start != -1 and end != -1 and end > start:
-            data = json.loads(text[start : end + 1])
-            if isinstance(data, list):
-                return [_normalize(str(x)) for x in data if _normalize(str(x))]
-    except json.JSONDecodeError:
-        pass
-    # numbered / bulleted lines
-    lines: list[str] = []
-    for line in text.splitlines():
-        line = re.sub(r"^\s*[-•*\d]+[.)]\s*", "", line).strip().strip("«»\"'")
-        if len(line) >= 25:
-            lines.append(_normalize(line))
-    return lines
-
-
-async def nightly_partial_refresh(
-    session: AsyncSession,
-    gemini: GeminiService,
-) -> dict[str, int]:
+async def nightly_partial_refresh(session: AsyncSession) -> dict[str, int]:
     """
-    Частичное обновление базы в 23:00:
-    1) AI добавляет новые цитаты по видам
-    2) утомлённые цитаты временно выключаются
-    3) давно выключенные seed снова включаются
+    Частичная ротация базы в 23:00:
+    1) утомлённые цитаты временно выключаются
+    2) давно выключенные снова включаются
     """
-    stats = {"added": 0, "retired": 0, "reactivated": 0, "ai_batches": 0}
+    stats = {"retired": 0, "reactivated": 0}
 
-    # 1. Добавление новых через AI
-    batches = [
-        (
-            "morning",
-            "Сгенерируй 5 коротких мотивационных цитат на русском "
-            "(1–2 предложения каждая) на темы: учёба, деньги, будущее, "
-            "дисциплина, совершенство, фокус. Без клише и эмодзи. "
-            "Верни ТОЛЬКО JSON-массив строк.",
-        ),
-        (
-            "hourly",
-            "Сгенерируй 4 короткие мотивационные фразы на русском "
-            "(1 предложение) для почасового пуша: действие, фокус, дожим. "
-            "Без клише и эмодзи. Верни ТОЛЬКО JSON-массив строк.",
-        ),
-        (
-            "rest",
-            "Сгенерируй 3 качественные цитаты на русском о ценности отдыха "
-            "и восстановления (Recovery day), 1–3 предложения. "
-            "Без клише и эмодзи. Верни ТОЛЬКО JSON-массив строк.",
-        ),
-    ]
-
-    if gemini.available:
-        for kind, prompt in batches:
-            try:
-                raw = await gemini.generate_text(
-                    prompt=prompt,
-                    system=(
-                        "Ты редактор мотивационных текстов на русском. "
-                        "Пиши сильно, коротко, без воды. Только JSON-массив строк."
-                    ),
-                    timeout=22.0,
-                    max_attempts=2,
-                    temperature=1.0,
-                )
-                quotes = _parse_ai_quote_list(raw)[:NIGHTLY_ADD]
-                stats["ai_batches"] += 1
-                for q in quotes:
-                    if await save_quote_if_new(
-                        session, text=q, kind=kind, theme="nightly", source="ai"
-                    ):
-                        stats["added"] += 1
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("nightly_ai_batch_failed", kind=kind, error=str(exc))
-
-    # 2. Retire перегретых активных (много использований + недавно)
     result = await session.execute(
         select(MotivationQuote)
         .where(
@@ -256,7 +142,6 @@ async def nightly_partial_refresh(
         .limit(NIGHTLY_RETIRE)
     )
     for row in result.scalars().all():
-        # не роняем пул ниже минимума по kind
         cnt = await session.execute(
             select(func.count()).where(
                 MotivationQuote.kind == row.kind,
@@ -270,7 +155,6 @@ async def nightly_partial_refresh(
         stats["retired"] += 1
     await session.flush()
 
-    # 3. Reactivate старых неактивных (предпочтительно seed)
     result = await session.execute(
         select(MotivationQuote)
         .where(MotivationQuote.is_active.is_(False))
@@ -285,7 +169,6 @@ async def nightly_partial_refresh(
         if reactivated >= NIGHTLY_REACTIVATE:
             break
         row.is_active = True
-        # лёгкий сброс «усталости», чтобы снова участвовать в ротации
         row.use_count = max(0, int(row.use_count or 0) // 2)
         reactivated += 1
     stats["reactivated"] = reactivated

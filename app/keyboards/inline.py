@@ -11,9 +11,11 @@ def _btn(text: str, callback_data: str, icon: str | None = None) -> InlineKeyboa
     return InlineKeyboardButton(**kwargs)
 
 
-def main_menu_kb() -> InlineKeyboardMarkup | None:
-    """Главный экран без inline-кнопок — секундомер только через /stopwatch."""
-    return None
+def main_menu_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(_btn("Состояние", "ci:hub", "stats"))
+    b.row(_btn("Секундомер", "menu:stopwatch", "timer"))
+    return b.as_markup()
 
 
 def back_menu_kb() -> InlineKeyboardMarkup:
@@ -55,4 +57,72 @@ def settings_kb(calendar_mode: str, pushes: bool) -> InlineKeyboardMarkup:
         )
     )
     b.row(_btn("« Меню", "menu:home", "home"))
+    return b.as_markup()
+
+
+def checkin_hub_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(_btn("Отметить сейчас", "ci:ask:now", "check"))
+    b.row(_btn("График месяца", "ci:chart:month", "chart"))
+    b.row(_btn("« Меню", "menu:home", "home"))
+    return b.as_markup()
+
+
+def checkin_choose_kb() -> InlineKeyboardMarkup:
+    """После «Отметить сейчас» — выбор измерения."""
+    b = InlineKeyboardBuilder()
+    b.row(
+        _btn("Физическое", "ci:ask:phys", "gym"),
+        _btn("Моральное", "ci:ask:moral", "star"),
+    )
+    b.row(_btn("« Назад", "ci:hub", "home"))
+    return b.as_markup()
+
+
+def checkin_score_kb(
+    *,
+    kind: str,
+    period: str,
+    prefix: str = "ci",
+    checkin_id: int | None = None,
+    allow_skip: bool = False,
+) -> InlineKeyboardMarkup:
+    """
+    kind: p (physical in full flow) | m (moral in full flow) | phys | moral
+    period: m | e
+    checkin_id: для шага moral полного опроса
+    allow_skip: кнопка «Не отмечать» (для пушей и добровольного пропуска)
+    """
+    b = InlineKeyboardBuilder()
+    row = []
+    for n in range(1, 6):
+        data = f"{prefix}:{kind}:{period}:{n}"
+        if checkin_id is not None:
+            data = f"{data}:{checkin_id}"
+        row.append(_btn(str(n), data))
+    b.row(*row)
+    if allow_skip:
+        b.row(_btn("Не отмечать", "ci:skip", "cross"))
+    # из выбора физ/мораль — назад к выбору; из пуша полного опроса — к хабу
+    back = "ci:ask:now" if kind in ("phys", "moral") else "ci:hub"
+    b.row(_btn("« Назад", back, "home"))
+    return b.as_markup()
+
+
+def checkin_done_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(_btn("График месяца", "ci:chart:month", "chart"))
+    b.row(_btn("Состояние", "ci:hub", "stats"), _btn("« Меню", "menu:home", "home"))
+    return b.as_markup()
+
+
+def checkin_month_kb(year: int, month: int) -> InlineKeyboardMarkup:
+    """Навигация по месяцам: ◀ ▶."""
+    b = InlineKeyboardBuilder()
+    b.row(
+        _btn("◀", f"ci:chart:month:{year:04d}-{month:02d}:prev"),
+        _btn(f"{month:02d}.{year}", f"ci:chart:month:{year:04d}-{month:02d}"),
+        _btn("▶", f"ci:chart:month:{year:04d}-{month:02d}:next"),
+    )
+    b.row(_btn("Состояние", "ci:hub", "stats"), _btn("« Меню", "menu:home", "home"))
     return b.as_markup()

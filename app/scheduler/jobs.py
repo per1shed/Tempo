@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from aiogram import Bot
 from aiogram.enums import ParseMode
 from aiogram.types import BufferedInputFile
@@ -10,7 +12,6 @@ from sqlalchemy.orm import selectinload
 from app.config import get_settings
 from app.database import async_session_factory
 from app.models import User
-from app.services.ai import GeminiService
 from app.services.calendar_mode import effective_calendar_mode
 from app.services.day import home_chart_png
 from app.services.motivation import generate_hourly_motivation, generate_morning_motivation
@@ -23,18 +24,19 @@ from app.services.schedule import (
     format_block_range,
     schedule_for_day,
 )
+from app.keyboards import checkin_score_kb
+from app.services import checkin as ci_svc
 from app.utils.custom_emoji import block_ce
 from app.utils.datetime_utils import now, today, tz
 from app.utils.logging import get_logger
-from app.utils.telegram_ui import clear_keyboard
+from app.utils.telegram_ui import clear_keyboard, remember_keyboard
 
 logger = get_logger(__name__)
 
 
 class SchedulerService:
-    def __init__(self, bot: Bot, gemini: GeminiService) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.gemini = gemini
         self.scheduler = AsyncIOScheduler(timezone=str(tz()))
         self.settings = get_settings()
 
@@ -50,6 +52,25 @@ class SchedulerService:
             )
 
         self.scheduler.add_job(
+            self.send_checkin_push,
+            "cron",
+            hour=7,
+            minute=30,
+            id="checkin_morning",
+            replace_existing=True,
+            kwargs={"period": ci_svc.PERIOD_MORNING},
+        )
+        self.scheduler.add_job(
+            self.send_checkin_push,
+            "cron",
+            hour=22,
+            minute=0,
+            id="checkin_evening",
+            replace_existing=True,
+            kwargs={"period": ci_svc.PERIOD_EVENING},
+        )
+
+        self.scheduler.add_job(
             self.refresh_quote_pool,
             "cron",
             hour=23,
@@ -62,6 +83,7 @@ class SchedulerService:
         logger.info(
             "scheduler_started",
             block_slots=len(block_transition_times()),
+            checkin_slots=["07:30", "22:00"],
         )
 
     def shutdown(self) -> None:
@@ -109,12 +131,11 @@ class SchedulerService:
             try:
                 if use_morning:
                     tip = await generate_morning_motivation(
-                        session, self.gemini, saturday=saturday
+                        session, saturday=saturday
                     )
                 else:
                     tip = await generate_hourly_motivation(
                         session,
-                        self.gemini,
                         block_title=cur.title,
                         block_kind=cur.kind,
                     )
@@ -146,10 +167,52 @@ class SchedulerService:
                 await session.rollback()
                 logger.warning("block_push_failed", error=str(exc))
 
+    async def send_checkin_push(self, period: str) -> None:
+        """Опрос самочувствия утром 07:30 / вечером 22:00."""
+        # Утром даём block-пушу 07:30 закончиться, чтобы не снять кнопки опроса.
+        if period == ci_svc.PERIOD_MORNING:
+            await asyncio.sleep(8)
+
+        async with async_session_factory() as session:
+            user = await self._admin_user(session)
+            if not user or not user.settings:
+                return
+            if not notifications_enabled(user.settings):
+                return
+
+            # Не спамим, если за этот слот уже есть полная отметка —
+            # дополнительные всё равно можно добавить командами.
+            existing = await ci_svc.get_latest_checkin(session, user.id, period=period)
+            if (
+                existing
+                and existing.physical is not None
+                and existing.moral is not None
+            ):
+                return
+
+            period_code = "m" if period == ci_svc.PERIOD_MORNING else "e"
+            text = ci_svc.prompt_physical_text(period)
+            kb = checkin_score_kb(kind="p", period=period_code, allow_skip=True)
+            try:
+                await clear_keyboard(
+                    self.bot, user.telegram_id, user.settings.last_kb_message_id
+                )
+                sent = await self.bot.send_message(
+                    user.telegram_id,
+                    text,
+                    reply_markup=kb,
+                    parse_mode=ParseMode.HTML,
+                )
+                await remember_keyboard(user.settings, sent, bot=self.bot)
+                await session.commit()
+            except Exception as exc:  # noqa: BLE001
+                await session.rollback()
+                logger.warning("checkin_push_failed", error=str(exc), period=period)
+
     async def refresh_quote_pool(self) -> None:
         async with async_session_factory() as session:
             try:
-                stats = await quotes_svc.nightly_partial_refresh(session, self.gemini)
+                stats = await quotes_svc.nightly_partial_refresh(session)
                 await session.commit()
                 logger.info("quote_pool_refresh_done", **stats)
             except Exception as exc:  # noqa: BLE001

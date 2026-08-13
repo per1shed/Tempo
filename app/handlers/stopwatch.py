@@ -40,6 +40,14 @@ async def cmd_stopwatch(message: Message, session, db_user, user_settings) -> No
     await _render(message, session, db_user, user_settings)
 
 
+@router.callback_query(F.data == "menu:stopwatch")
+async def cb_menu_stopwatch(
+    callback: CallbackQuery, session, db_user, user_settings
+) -> None:
+    await callback.answer()
+    await _render(callback.message, session, db_user, user_settings)
+
+
 @router.callback_query(F.data == "sw:start")
 async def cb_start(callback: CallbackQuery, session, db_user) -> None:
     state = await sw_svc.get_or_create(session, db_user.id)
