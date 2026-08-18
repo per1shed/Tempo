@@ -104,7 +104,7 @@ def schedule_for_day(d: date, *, calendar_mode: str = "auto") -> list[Block]:
     Свободные окна (14:00–14:30, 15:00–16:30 и т.п.) не заполняются.
 
     calendar_mode: 'term' | 'holiday' | 'auto'
-    Суббота — recovery: утро, Recovery day, вечер, сон.
+    Суббота — день отдыха: один блок Recovery day на весь день + сон.
     Воскресенье — без зала, без университета.
     Пн/ср/пт — зал + IT.
     Вт/чт — IT без зала.
@@ -116,17 +116,16 @@ def schedule_for_day(d: date, *, calendar_mode: str = "auto") -> list[Block]:
         calendar_mode = seasonal_mode(d)
     term = calendar_mode == "term"
 
-    if wd == 5:  # Saturday recovery
+    if wd == 5:  # Saturday — полный день отдыха
         return [
-            _morning_routine(),
             Block(
-                _t(10, 0),
-                _t(18, 0),
+                _t(6, 30),
+                _t(22, 30),
                 BlockKind.RECOVERY,
                 "Recovery day",
                 C["recovery"],
             ),
-            *_evening_and_sleep(),
+            Block(_t(22, 30), _t(6, 30), BlockKind.SLEEP, "Сон", C["sleep"]),
         ]
 
     blocks: list[Block] = [_morning_routine()]
@@ -221,9 +220,6 @@ def block_after(blocks: list[Block], ref: Block | None) -> Block | None:
 def format_block_range(b: Block) -> str:
     if b.kind == BlockKind.SLEEP:
         return f"{b.start.strftime('%H:%M')} → {b.end.strftime('%H:%M')}"
-    # Утренняя рутина — как в шаблоне: только время старта
-    if b.kind == BlockKind.ROUTINE_MORNING:
-        return b.start.strftime("%H:%M")
     return f"{b.start.strftime('%H:%M')}–{b.end.strftime('%H:%M')}"
 
 

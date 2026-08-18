@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from app.keyboards import (
     checkin_choose_kb,
-    checkin_done_kb,
-    checkin_hub_kb,
     checkin_month_kb,
     checkin_score_kb,
 )
@@ -15,6 +14,7 @@ from app.services import checkin as ci_svc
 from app.utils.custom_emoji import ce
 from app.utils.datetime_utils import today
 from app.utils.telegram_ui import clear_keyboard, remember_keyboard, show_screen
+from app.utils.wait import CHART_WAIT, wait_message
 
 router = Router(name="checkin")
 
@@ -38,39 +38,60 @@ def _code(period: str) -> str:
     return _PERIOD_CODE.get(period, "m")
 
 
-async def _hub_payload(session, db_user):
-    morning = await ci_svc.get_latest_checkin(
-        session, db_user.id, period=ci_svc.PERIOD_MORNING
-    )
-    evening = await ci_svc.get_latest_checkin(
-        session, db_user.id, period=ci_svc.PERIOD_EVENING
-    )
-    recent = await ci_svc.list_recent(session, db_user.id, days=14)
-    morning_count = await ci_svc.count_today(
-        session, db_user.id, period=ci_svc.PERIOD_MORNING
-    )
-    evening_count = await ci_svc.count_today(
-        session, db_user.id, period=ci_svc.PERIOD_EVENING
-    )
-    text = ci_svc.hub_text(
-        morning=morning,
-        evening=evening,
-        recent=recent,
-        morning_count=morning_count,
-        evening_count=evening_count,
-    )
-    return text
+async def _hub_payload(session, db_user, *, year: int | None = None, month: int | None = None):
+    ref = today()
+    year = year or ref.year
+    month = month or ref.month
+    rows = await ci_svc.list_for_month(session, db_user.id, year=year, month=month)
+    return ci_svc.hub_text(month_rows=rows)
+
+
+async def _send_month_dashboard(
+    *,
+    bot,
+    chat_id: int,
+    session,
+    db_user,
+    user_settings,
+    caption: str,
+    year: int | None = None,
+    month: int | None = None,
+) -> Message:
+    """Строит дашборд месяца и шлёт фото с навигацией."""
+    ref = today()
+    year = year or ref.year
+    month = month or ref.month
+    async with wait_message(bot, chat_id, CHART_WAIT):
+        rows = await ci_svc.list_for_month(session, db_user.id, year=year, month=month)
+        png = ci_svc.month_dashboard_png(
+            rows,
+            year=year,
+            month=month,
+            header_day=ref.day if (year, month) == (ref.year, ref.month) else None,
+        )
+        await clear_keyboard(bot, chat_id, user_settings.last_kb_message_id)
+        sent = await bot.send_photo(
+            chat_id,
+            BufferedInputFile(png, filename="state_month.png"),
+            caption=caption,
+            reply_markup=checkin_month_kb(year, month),
+        )
+        await remember_keyboard(user_settings, sent, bot=bot)
+        return sent
 
 
 async def _open_hub(message: Message, session, db_user, user_settings) -> Message:
-    text = await _hub_payload(session, db_user)
-    kb = checkin_hub_kb()
-    await clear_keyboard(
-        message.bot, message.chat.id, user_settings.last_kb_message_id
+    ref = today()
+    return await _send_month_dashboard(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        session=session,
+        db_user=db_user,
+        user_settings=user_settings,
+        caption=await _hub_payload(session, db_user),
+        year=ref.year,
+        month=ref.month,
     )
-    sent = await message.answer(text, reply_markup=kb)
-    await remember_keyboard(user_settings, sent, bot=message.bot)
-    return sent
 
 
 async def _edit_or_answer(
@@ -123,62 +144,23 @@ async def _safe_answer(callback: CallbackQuery, text: str | None = None, **kwarg
         pass
 
 
-async def _send_month_dashboard(
-    callback: CallbackQuery,
-    session,
-    db_user,
-    user_settings,
-    *,
-    caption: str,
-    year: int | None = None,
-    month: int | None = None,
-) -> Message:
-    """Строит дашборд месяца и шлёт фото с навигацией."""
-    from aiogram.exceptions import TelegramBadRequest
-
-    ref = today()
-    year = year or ref.year
-    month = month or ref.month
-
-    await clear_keyboard(
-        callback.bot, callback.message.chat.id, user_settings.last_kb_message_id
-    )
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-
-    wait_msg = await callback.message.answer(
-        f"{ce('chart')}<b>График строится…</b>\nПодождите немного."
-    )
-
-    try:
-        rows = await ci_svc.list_for_month(session, db_user.id, year=year, month=month)
-        png = ci_svc.month_dashboard_png(
-            rows,
-            year=year,
-            month=month,
-            header_day=ref.day if (year, month) == (ref.year, ref.month) else None,
-        )
-        sent = await callback.message.answer_photo(
-            BufferedInputFile(png, filename="state_month.png"),
-            caption=caption,
-            reply_markup=checkin_month_kb(year, month),
-        )
-        await remember_keyboard(user_settings, sent, bot=callback.bot)
-        return sent
-    finally:
-        try:
-            await wait_msg.delete()
-        except TelegramBadRequest:
-            pass
-
-
 @router.callback_query(F.data == "ci:hub")
-async def cb_hub(callback: CallbackQuery, session, db_user, user_settings) -> None:
+async def cb_hub(
+    callback: CallbackQuery, session, db_user, user_settings, state: FSMContext
+) -> None:
+    await state.clear()
     await _safe_answer(callback)
-    text = await _hub_payload(session, db_user)
-    await _edit_or_answer(callback, text, checkin_hub_kb(), user_settings)
+    ref = today()
+    await _send_month_dashboard(
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        session=session,
+        db_user=db_user,
+        user_settings=user_settings,
+        caption=await _hub_payload(session, db_user),
+        year=ref.year,
+        month=ref.month,
+    )
 
 
 @router.callback_query(F.data == "ci:ask:now")
@@ -190,13 +172,19 @@ async def cb_ask_now(callback: CallbackQuery, user_settings) -> None:
 
 
 @router.callback_query(F.data == "ci:skip")
-async def cb_skip(callback: CallbackQuery, user_settings) -> None:
+async def cb_skip(callback: CallbackQuery, session, db_user, user_settings) -> None:
     await _safe_answer(callback, "Пропущено")
-    text = (
-        f"{ce('cross')}<b>Не отмечаем</b>\n"
-        "Ок, можно пропустить. Вернуться к опросу — в разделе Состояние."
+    ref = today()
+    await _send_month_dashboard(
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        session=session,
+        db_user=db_user,
+        user_settings=user_settings,
+        caption=await _hub_payload(session, db_user),
+        year=ref.year,
+        month=ref.month,
     )
-    await _edit_or_answer(callback, text, checkin_done_kb(), user_settings)
 
 
 @router.callback_query(F.data == "ci:ask:phys")
@@ -240,7 +228,7 @@ async def cb_full_physical(
 
 @router.callback_query(F.data.regexp(r"^ci:m:[me]:[1-5]:\d+$"))
 async def cb_full_moral(
-    callback: CallbackQuery, session, db_user, user_settings
+    callback: CallbackQuery, session, db_user, user_settings, state: FSMContext
 ) -> None:
     _, _, period_code, score_s, checkin_id_s = callback.data.split(":")
     score = int(score_s)
@@ -253,16 +241,41 @@ async def cb_full_moral(
             session, db_user.id, period=period, moral=score
         )
     await _safe_answer(callback, "Сохранено")
+
+    # Вечер: после самочувствия — опрос финансов
+    if period_code == "e":
+        from app.handlers.finance import start_finance_prompt
+        from app.services import finance as fin_svc
+
+        balance = await fin_svc.get_balance(session, db_user.id, user_settings)
+        await start_finance_prompt(
+            bot=callback.bot,
+            chat_id=callback.message.chat.id,
+            user_settings=user_settings,
+            state=state,
+            text=fin_svc.prompt_evening_intro_text(
+                physical=row.physical, moral=row.moral, balance=balance
+            ),
+            allow_skip=True,
+            source="evening",
+            physical=row.physical,
+            moral=row.moral,
+        )
+        return
+
     ref = today()
     await _send_month_dashboard(
-        callback,
-        session,
-        db_user,
-        user_settings,
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        session=session,
+        db_user=db_user,
+        user_settings=user_settings,
         caption=(
             f"{ci_svc.saved_text(row)}\n\n"
             f"{ce('chart')}<b>Самочувствие</b> · {ref.month:02d}.{ref.year}"
         ),
+        year=ref.year,
+        month=ref.month,
     )
 
 
@@ -277,14 +290,17 @@ async def cb_phys_only(
     await _safe_answer(callback, "Сохранено")
     ref = today()
     await _send_month_dashboard(
-        callback,
-        session,
-        db_user,
-        user_settings,
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        session=session,
+        db_user=db_user,
+        user_settings=user_settings,
         caption=(
             f"{ci_svc.saved_dim_text(kind='physical', period=period, score=score)}\n\n"
             f"{ce('chart')}<b>Самочувствие</b> · {ref.month:02d}.{ref.year}"
         ),
+        year=ref.year,
+        month=ref.month,
     )
 
 
@@ -299,14 +315,17 @@ async def cb_moral_only(
     await _safe_answer(callback, "Сохранено")
     ref = today()
     await _send_month_dashboard(
-        callback,
-        session,
-        db_user,
-        user_settings,
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        session=session,
+        db_user=db_user,
+        user_settings=user_settings,
         caption=(
             f"{ci_svc.saved_dim_text(kind='moral', period=period, score=score)}\n\n"
             f"{ce('chart')}<b>Самочувствие</b> · {ref.month:02d}.{ref.year}"
         ),
+        year=ref.year,
+        month=ref.month,
     )
 
 
@@ -334,11 +353,12 @@ async def cb_chart_month(
             month += 1
 
     await _send_month_dashboard(
-        callback,
-        session,
-        db_user,
-        user_settings,
-        caption=f"{ce('chart')}<b>Самочувствие</b> · {month:02d}.{year}",
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        session=session,
+        db_user=db_user,
+        user_settings=user_settings,
+        caption=await _hub_payload(session, db_user, year=year, month=month),
         year=year,
         month=month,
     )
@@ -350,9 +370,12 @@ async def cb_chart(callback: CallbackQuery, session, db_user, user_settings) -> 
     await _safe_answer(callback)
     ref = today()
     await _send_month_dashboard(
-        callback,
-        session,
-        db_user,
-        user_settings,
-        caption=f"{ce('chart')}<b>Самочувствие</b> · {ref.month:02d}.{ref.year}",
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        session=session,
+        db_user=db_user,
+        user_settings=user_settings,
+        caption=await _hub_payload(session, db_user),
+        year=ref.year,
+        month=ref.month,
     )

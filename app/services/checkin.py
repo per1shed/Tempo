@@ -288,47 +288,31 @@ def month_dashboard_png(
     )
 
 
-def hub_text(
-    *,
-    morning: StateCheckin | None,
-    evening: StateCheckin | None,
-    recent: list[StateCheckin],
-    morning_count: int = 0,
-    evening_count: int = 0,
-) -> str:
+def hub_text(*, month_rows: list[StateCheckin]) -> str:
     d = today()
     lines = [
         f"{ce('stats')}<b>Состояние</b>",
         f"{weekday_ru(d).capitalize()}, {d.strftime('%d.%m.%Y')}",
-        "",
-        f"{ce('sun')}<b>Утро</b> · записей: {morning_count}",
-        f"Последнее физ.: {format_score(morning.physical if morning else None)}",
-        f"Последнее мор.: {format_score(morning.moral if morning else None)}",
-        "",
-        f"{ce('moon')}<b>Вечер</b> · записей: {evening_count}",
-        f"Последнее физ.: {format_score(evening.physical if evening else None)}",
-        f"Последнее мор.: {format_score(evening.moral if evening else None)}",
     ]
 
-    phys_vals = [r.physical for r in recent if r.physical is not None]
-    moral_vals = [r.moral for r in recent if r.moral is not None]
+    phys_vals = [r.physical for r in month_rows if r.physical is not None]
+    moral_vals = [r.moral for r in month_rows if r.moral is not None]
     if phys_vals or moral_vals:
         lines.append("")
-        lines.append(f"{ce('chart')}<b>Среднее · 14 дней</b>")
+        lines.append(f"{ce('chart')}<b>Среднее за месяц</b>")
         if phys_vals:
             avg_p = sum(phys_vals) / len(phys_vals)
-            lines.append(f"Физическое: {avg_p:.1f}/5 ({len(phys_vals)} отм.)")
+            lines.append(f"Физическое: {avg_p:.1f}/5")
         if moral_vals:
             avg_m = sum(moral_vals) / len(moral_vals)
-            lines.append(f"Моральное: {avg_m:.1f}/5 ({len(moral_vals)} отм.)")
+            lines.append(f"Моральное: {avg_m:.1f}/5")
     return "\n".join(lines)
 
 
 def prompt_choose_text(period: str) -> str:
     label = PERIOD_LABEL.get(period, period)
-    icon = "sun" if period == PERIOD_MORNING else "moon"
     return (
-        f"{ce(icon)}<b>{label} · отметить</b>\n\n"
+        f"{ce('check')}<b>{label} · отметить</b>\n\n"
         "Что хочешь оценить?"
     )
 
@@ -388,11 +372,9 @@ def saved_dim_text(*, kind: str, period: str, score: int) -> str:
     if kind == "physical":
         return (
             f"{ce('check')}<b>Физическое сохранено</b> · {label.lower()}\n\n"
-            f"{ce('gym')}{format_score(score)}\n\n"
-            "Добавлено в историю (предыдущие отметки на месте)."
+            f"{ce('gym')}{format_score(score)}"
         )
     return (
         f"{ce('check')}<b>Моральное сохранено</b> · {label.lower()}\n\n"
-        f"{ce('star')}{format_score(score)}\n\n"
-        "Добавлено в историю (предыдущие отметки на месте)."
+        f"{ce('star')}{format_score(score)}"
     )

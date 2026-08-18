@@ -19,11 +19,6 @@ from sqlalchemy.orm import selectinload
 
 BOT_COMMANDS = [
     BotCommand(command="start", description="Главное меню"),
-    BotCommand(command="menu", description="Открыть меню"),
-    BotCommand(command="physical", description="Физическое состояние"),
-    BotCommand(command="moral", description="Моральное состояние"),
-    BotCommand(command="state", description="Состояние и график"),
-    BotCommand(command="stopwatch", description="Секундомер"),
     BotCommand(command="settings", description="Настройки"),
 ]
 

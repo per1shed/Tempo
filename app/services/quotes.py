@@ -30,6 +30,39 @@ HARD_FALLBACK = {
     ),
 }
 
+# Темы цитат по типу блока расписания (приоритет слева направо).
+BLOCK_THEME_MAP: dict[str, list[str]] = {
+    "routine_morning": ["routine_morning", "discipline", "drive"],
+    "routine_evening": ["routine_evening", "discipline", "focus"],
+    "university": ["university", "study", "focus"],
+    "study": ["study", "it", "focus"],
+    "english": ["english", "study", "focus"],
+    "gym": ["sport", "drive", "discipline"],
+    "it": ["it", "focus", "excellence"],
+    "recovery": ["recovery", "rest"],
+    "sleep": ["sleep", "rest", "recovery"],
+    "free": ["focus", "drive", "discipline"],
+}
+
+THEME_FALLBACK = {
+    "sport": "Зал — это час, где ты выбираешь себя сильнее.",
+    "it": "Сейчас только задача перед тобой. Остальное — шум.",
+    "english": "Практика сегодня — уверенность завтра.",
+    "university": "Учёба любит ритм: пришёл, включился, зафиксировал.",
+    "study": "Одна законченная тема сильнее десяти начатых.",
+    "routine_morning": "Утро задаёт тон. Сделай первые действия чётко.",
+    "routine_evening": "Закрой день аккуратно — завтра начнётся чище.",
+    "sleep": "Сон — не награда. Это часть системы.",
+    "recovery": "Recovery — не лень. Это стратегия на длинной дистанции.",
+}
+
+
+def themes_for_block(block_kind: str | object | None) -> list[str]:
+    if block_kind is None:
+        return []
+    key = getattr(block_kind, "value", None) or str(block_kind)
+    return list(BLOCK_THEME_MAP.get(key, []))
+
 
 def _normalize(text: str) -> str:
     return " ".join((text or "").split()).strip()
@@ -83,24 +116,45 @@ async def pick_quote(
     session: AsyncSession,
     *,
     kind: str,
+    themes: list[str] | None = None,
     mark_used: bool = True,
 ) -> str:
     """
     Берёт наименее изношенную активную цитату нужного типа.
-    Приоритет: давно не использовалась → мало использовалась → случайность.
+    Если переданы themes — сначала ищет среди них (по порядку приоритета),
+    иначе / при пустом результате — любую цитату этого kind.
     """
     kind = kind if kind in HARD_FALLBACK else "morning"
-    result = await session.execute(
-        select(MotivationQuote)
-        .where(MotivationQuote.kind == kind, MotivationQuote.is_active.is_(True))
-        .order_by(
-            MotivationQuote.last_used_at.asc().nulls_first(),
-            MotivationQuote.use_count.asc(),
-            func.random(),
+    theme_list = [t for t in (themes or []) if t]
+
+    async def _candidates(*, theme: str | None = None, limit: int = 12):
+        clauses = [
+            MotivationQuote.kind == kind,
+            MotivationQuote.is_active.is_(True),
+        ]
+        if theme:
+            clauses.append(MotivationQuote.theme == theme)
+        result = await session.execute(
+            select(MotivationQuote)
+            .where(*clauses)
+            .order_by(
+                MotivationQuote.last_used_at.asc().nulls_first(),
+                MotivationQuote.use_count.asc(),
+                func.random(),
+            )
+            .limit(limit)
         )
-        .limit(12)
-    )
-    candidates = list(result.scalars().all())
+        return list(result.scalars().all())
+
+    candidates: list[MotivationQuote] = []
+    for theme in theme_list:
+        candidates = await _candidates(theme=theme)
+        if candidates:
+            break
+
+    if not candidates:
+        candidates = await _candidates(theme=None)
+
     if not candidates:
         result = await session.execute(
             select(MotivationQuote)
@@ -110,6 +164,8 @@ async def pick_quote(
         )
         row = result.scalar_one_or_none()
         if row is None:
+            if theme_list and theme_list[0] in THEME_FALLBACK:
+                return THEME_FALLBACK[theme_list[0]]
             return HARD_FALLBACK[kind]
         candidates = [row]
 

@@ -1,6 +1,10 @@
 from app.models.entities import (
     BlockLog,
+    DateCounter,
+    FinanceLog,
     MotivationQuote,
+    Note,
+    NoteCategory,
     StateCheckin,
     StopwatchState,
     User,
@@ -10,7 +14,11 @@ from app.models.entities import (
 
 __all__ = [
     "BlockLog",
+    "DateCounter",
+    "FinanceLog",
     "MotivationQuote",
+    "Note",
+    "NoteCategory",
     "StateCheckin",
     "StopwatchState",
     "User",

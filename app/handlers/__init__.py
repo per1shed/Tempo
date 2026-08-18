@@ -2,6 +2,8 @@ from aiogram import Router
 
 from app.handlers.checkin import router as checkin_router
 from app.handlers.day import router as day_router
+from app.handlers.finance import router as finance_router
+from app.handlers.notes import router as notes_router
 from app.handlers.settings import router as settings_router
 from app.handlers.start import router as start_router
 from app.handlers.stopwatch import router as stopwatch_router
@@ -12,6 +14,8 @@ def setup_routers() -> Router:
     root.include_router(start_router)
     root.include_router(day_router)
     root.include_router(checkin_router)
+    root.include_router(finance_router)
+    root.include_router(notes_router)
     root.include_router(settings_router)
     root.include_router(stopwatch_router)
     return root

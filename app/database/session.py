@@ -60,11 +60,47 @@ async def init_db() -> None:
                 "ADD COLUMN IF NOT EXISTS last_block_key VARCHAR(64)"
             )
         )
+        await conn.execute(
+            text(
+                "ALTER TABLE user_settings "
+                "ADD COLUMN IF NOT EXISTS finance_cash DOUBLE PRECISION"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE user_settings "
+                "ADD COLUMN IF NOT EXISTS finance_debt DOUBLE PRECISION"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE user_settings "
+                "ADD COLUMN IF NOT EXISTS finance_updated_on DATE"
+            )
+        )
         # История самочувствия: убираем unique (утро/вечер больше не перезаписываются)
         await conn.execute(
             text(
                 "ALTER TABLE state_checkins "
                 "DROP CONSTRAINT IF EXISTS uq_state_user_day_period"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE notes "
+                "ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN DEFAULT FALSE"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE notes DROP CONSTRAINT IF EXISTS notes_category_id_fkey"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE notes ADD CONSTRAINT notes_category_id_fkey "
+                "FOREIGN KEY (category_id) REFERENCES note_categories(id) "
+                "ON DELETE CASCADE"
             )
         )
 

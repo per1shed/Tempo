@@ -6,7 +6,9 @@ from app.models import UserSettings
 from app.services.calendar_mode import effective_calendar_mode
 from app.services import charts
 from app.services.schedule import (
+    BlockKind,
     active_block,
+    current_block,
     day_status_line,
     format_block_range,
     schedule_for_day,
@@ -19,27 +21,34 @@ def _mode(settings: UserSettings, d=None) -> str:
     return effective_calendar_mode(settings.calendar_mode, d)
 
 
-def home_text(settings: UserSettings, name: str | None = None) -> str:
+def home_text(
+    settings: UserSettings,
+    name: str | None = None,
+    *,
+    counters: list | None = None,
+) -> str:
     """Главный экран: статус дня (бывший «Сейчас») + меню."""
+    from app.services import counters as cnt_svc
+
     display_name = (name or "Pavel").strip() or "Pavel"
     at = now()
     mode = _mode(settings, at.date())
     blocks = schedule_for_day(at.date(), calendar_mode=mode)
-    cur = active_block(blocks, at)
+    cur = current_block(blocks, at)
 
     lines = [
         f"{ce('person')}{display_name}",
         "",
         f"{ce('calendar')}{weekday_ru().capitalize()}, {today().strftime('%d.%m.%Y')}",
         f"{ce('timer')}{new_year_label(short=True)}",
-        "",
     ]
-    if cur:
+    if counters:
+        lines.extend(cnt_svc.home_lines(counters))
+    if cur is not None and cur.kind != BlockKind.FREE:
+        lines.append("")
         lines.append(
             f"{block_ce(cur.kind)}Сейчас: <b>{cur.title}</b> ({format_block_range(cur)})"
         )
-    else:
-        lines.append("Сейчас нет активного блока.")
     return "\n".join(lines)
 
 

@@ -11,6 +11,7 @@ from app.utils.custom_emoji import ce
 
 
 DEFAULT_WAIT = f"{ce('timer')}Подождите, обрабатываю…"
+CHART_WAIT = f"{ce('chart')}Строю график…"
 
 
 @asynccontextmanager

@@ -15,7 +15,6 @@ from app.models import User
 from app.services.calendar_mode import effective_calendar_mode
 from app.services.day import home_chart_png
 from app.services.motivation import generate_hourly_motivation, generate_morning_motivation
-from app.services.notifications import notifications_enabled
 from app.services import quotes as quotes_svc
 from app.services.schedule import (
     BlockKind,
@@ -24,12 +23,13 @@ from app.services.schedule import (
     format_block_range,
     schedule_for_day,
 )
-from app.keyboards import checkin_score_kb
+from app.keyboards import checkin_score_kb, main_menu_kb
 from app.services import checkin as ci_svc
 from app.utils.custom_emoji import block_ce
 from app.utils.datetime_utils import now, today, tz
 from app.utils.logging import get_logger
 from app.utils.telegram_ui import clear_keyboard, remember_keyboard
+from app.utils.wait import CHART_WAIT, wait_message
 
 logger = get_logger(__name__)
 
@@ -105,8 +105,6 @@ class SchedulerService:
             user = await self._admin_user(session)
             if not user or not user.settings:
                 return
-            if not notifications_enabled(user.settings):
-                return
 
             mode = effective_calendar_mode(user.settings.calendar_mode)
             blocks = schedule_for_day(today(), calendar_mode=mode)
@@ -131,7 +129,9 @@ class SchedulerService:
             try:
                 if use_morning:
                     tip = await generate_morning_motivation(
-                        session, saturday=saturday
+                        session,
+                        saturday=saturday,
+                        block_kind=cur.kind,
                     )
                 else:
                     tip = await generate_hourly_motivation(
@@ -151,18 +151,20 @@ class SchedulerService:
                     tip_cut = tip[: max(0, len(tip) - overflow - 1)] + "…"
                     caption = f"{tip_cut}\n\n{block_line}"
 
-                png = home_chart_png(user.settings)
-                await clear_keyboard(
-                    self.bot, user.telegram_id, user.settings.last_kb_message_id
-                )
-                await self.bot.send_photo(
-                    user.telegram_id,
-                    BufferedInputFile(png, filename="block.png"),
-                    caption=caption,
-                    parse_mode=ParseMode.HTML,
-                )
-                user.settings.last_kb_message_id = None
-                await session.commit()
+                async with wait_message(self.bot, user.telegram_id, CHART_WAIT):
+                    png = home_chart_png(user.settings)
+                    await clear_keyboard(
+                        self.bot, user.telegram_id, user.settings.last_kb_message_id
+                    )
+                    sent = await self.bot.send_photo(
+                        user.telegram_id,
+                        BufferedInputFile(png, filename="block.png"),
+                        caption=caption,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=main_menu_kb(),
+                    )
+                    await remember_keyboard(user.settings, sent, bot=self.bot)
+                    await session.commit()
             except Exception as exc:  # noqa: BLE001
                 await session.rollback()
                 logger.warning("block_push_failed", error=str(exc))
@@ -176,8 +178,6 @@ class SchedulerService:
         async with async_session_factory() as session:
             user = await self._admin_user(session)
             if not user or not user.settings:
-                return
-            if not notifications_enabled(user.settings):
                 return
 
             # Не спамим, если за этот слот уже есть полная отметка —

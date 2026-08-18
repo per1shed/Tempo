@@ -53,6 +53,26 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    finance_logs: Mapped[list["FinanceLog"]] = relationship(
+        "FinanceLog",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    note_categories: Mapped[list["NoteCategory"]] = relationship(
+        "NoteCategory",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    notes: Mapped[list["Note"]] = relationship(
+        "Note",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    date_counters: Mapped[list["DateCounter"]] = relationship(
+        "DateCounter",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
 
 class UserSettings(Base):
@@ -73,6 +93,10 @@ class UserSettings(Base):
     # Последнее сообщение с inline-клавиатурой (только оно может иметь кнопки)
     last_kb_message_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     last_block_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Текущий баланс (живёт всегда; история для графика — в finance_logs)
+    finance_cash: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    finance_debt: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    finance_updated_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -164,6 +188,106 @@ class StateCheckin(Base):
     )
 
     user: Mapped["User"] = relationship("User", back_populates="state_checkins")
+
+
+class FinanceLog(Base):
+    """Вечерний / ручной снимок финансов: деньги и долги."""
+
+    __tablename__ = "finance_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    logged_on: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    # Деньги (наличные + счета)
+    cash: Mapped[float] = mapped_column(Float, nullable=False)
+    # Общая сумма долгов
+    debt: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="finance_logs")
+
+
+class NoteCategory(Base):
+    """Папка / категория заметок."""
+
+    __tablename__ = "note_categories"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_note_cat_user_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="note_categories")
+    notes: Mapped[list["Note"]] = relationship(
+        "Note",
+        back_populates="category",
+        cascade="all, delete-orphan",
+    )
+
+
+class Note(Base):
+    """Заметка / задача в категории."""
+
+    __tablename__ = "notes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    category_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("note_categories.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    is_done: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    done_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    created_on: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="notes")
+    category: Mapped[Optional["NoteCategory"]] = relationship(
+        "NoteCategory", back_populates="notes"
+    )
+
+
+class DateCounter(Base):
+    """Пользовательский счётчик: до даты или с даты."""
+
+    __tablename__ = "date_counters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    # until = осталось; since = прошло; date = просто дата
+    mode: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
+    target_on: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="date_counters")
 
 
 class MotivationQuote(Base):

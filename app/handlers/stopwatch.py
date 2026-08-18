@@ -3,6 +3,7 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app.keyboards import stopwatch_kb
@@ -42,8 +43,9 @@ async def cmd_stopwatch(message: Message, session, db_user, user_settings) -> No
 
 @router.callback_query(F.data == "menu:stopwatch")
 async def cb_menu_stopwatch(
-    callback: CallbackQuery, session, db_user, user_settings
+    callback: CallbackQuery, session, db_user, user_settings, state: FSMContext
 ) -> None:
+    await state.clear()
     await callback.answer()
     await _render(callback.message, session, db_user, user_settings)
 

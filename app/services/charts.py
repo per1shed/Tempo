@@ -335,7 +335,7 @@ def render_focus_blocks(
 ) -> bytes:
     """
     Карточка со всеми блоками плана на день.
-    Только текущий выделен синей рамкой и меткой «СЕЙЧАС» — без галочек.
+    Только текущий выделен синей рамкой и меткой «СЕЙЧАС».
     """
     scale = 2
     width = 780
@@ -601,39 +601,64 @@ def _load_sf_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
     return _load_font(size, bold=bold)
 
 
-def _catmull_rom(
-    points: list[tuple[float, float]], *, steps: int = 40, tension: float = 0.5
+def _polyline(
+    points: list[tuple[float, float]], *, steps_per_seg: int = 8
 ) -> list[tuple[float, float]]:
-    """Элегантная точная кривая (центростремительный Catmull-Rom)."""
+    """Прямые отрезки между точками."""
+    if len(points) < 2:
+        return list(points)
+    out: list[tuple[float, float]] = []
+    for i in range(len(points) - 1):
+        x0, y0 = points[i]
+        x1, y1 = points[i + 1]
+        for j in range(steps_per_seg):
+            t = j / steps_per_seg
+            out.append((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t))
+    out.append(points[-1])
+    return out
+
+
+def _smooth_clamped(
+    points: list[tuple[float, float]], *, steps_per_seg: int = 48
+) -> list[tuple[float, float]]:
+    """Плавные скруглённые кубические Безье через точки без перелёта по Y.
+
+    Горизонтальные касательные на концах сегмента → ease-in-out скругление.
+    Контрольные точки лежат на той же Y, что и вершины, поэтому по выпуклой
+    оболочке кривая остаётся строго между соседними точками (без overshoot).
+    """
     if len(points) < 2:
         return list(points)
     if len(points) == 2:
-        (x0, y0), (x1, y1) = points
-        return [
-            (x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps)
-            for i in range(steps + 1)
-        ]
+        return _polyline(points, steps_per_seg=steps_per_seg)
 
-    # duplicate endpoints for open curve
-    pts = [points[0], *points, points[-1]]
+    # Доля сегмента до контрольной точки: больше → мягче/круглее переход.
+    pull = 0.42
+
     out: list[tuple[float, float]] = []
-    for i in range(1, len(pts) - 2):
-        p0, p1, p2, p3 = pts[i - 1], pts[i], pts[i + 1], pts[i + 2]
-        for j in range(steps):
-            t = j / steps
-            t2, t3 = t * t, t * t * t
-            # standard Catmull-Rom with tension
-            x = 0.5 * (
-                (2 * p1[0])
-                + (-p0[0] + p2[0]) * t
-                + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2
-                + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3
+    for i in range(len(points) - 1):
+        x0, y0 = points[i]
+        x1, y1 = points[i + 1]
+        dx = x1 - x0
+        c1x = x0 + dx * pull
+        c2x = x1 - dx * pull
+        # горизонтальные касательные: максимальное скругление без выхода за Y
+        c1y, c2y = y0, y1
+
+        for j in range(steps_per_seg):
+            t = j / steps_per_seg
+            u = 1.0 - t
+            x = (
+                u * u * u * x0
+                + 3 * u * u * t * c1x
+                + 3 * u * t * t * c2x
+                + t * t * t * x1
             )
-            y = 0.5 * (
-                (2 * p1[1])
-                + (-p0[1] + p2[1]) * t
-                + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2
-                + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3
+            y = (
+                u * u * u * y0
+                + 3 * u * u * t * c1y
+                + 3 * u * t * t * c2y
+                + t * t * t * y1
             )
             out.append((x, y))
     out.append(points[-1])
@@ -676,13 +701,10 @@ def _draw_elegant_line(
     fill_alpha: int = 38,
     fill_power: float = 2.0,
 ) -> None:
-    """Точная плавная линия + мягкий вертикальный градиент заливки.
-
-    fill_power < 1 — свечение заметнее у пола; 2 — быстро гаснет вниз.
-    """
+    """Максимально плавная скруглённая линия без перелёта за точки + заливка."""
     if len(coords) < 2:
         return
-    smooth = _catmull_rom(coords, steps=48)
+    smooth = _smooth_clamped(coords, steps_per_seg=48)
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
     od = ImageDraw.Draw(overlay)
     bands = 28
@@ -695,7 +717,6 @@ def _draw_elegant_line(
         top_e = [(x, y + (bottom - y) * t0) for x, y in smooth]
         bot_e = [(x, y + (bottom - y) * t1) for x, y in reversed(smooth)]
         od.polygon(top_e + bot_e, fill=(*color, a))
-    # double-pass line for crisp anti-aliased look
     od.line(smooth, fill=(*color, 90), width=stroke + 2, joint="curve")
     od.line(smooth, fill=(*color, 255), width=stroke, joint="curve")
     base.alpha_composite(overlay)
@@ -914,8 +935,10 @@ def render_state_dashboard_b2(
         tw = draw.textlength(lab, font=f_axis)
         draw.text((cl - tw - 8 * scale, gy - 7 * scale), lab, font=f_axis, fill=SECONDARY)
 
-    p_coords = [xy(d, score_to_100(v), box) for d, v in p_series]
-    m_coords = [xy(d, score_to_100(v), box) for d, v in m_series]
+    p_bends = _series_bends(p_series)
+    m_bends = _series_bends(m_series)
+    p_coords = [xy(d, score_to_100(v), box) for d, v in p_bends]
+    m_coords = [xy(d, score_to_100(v), box) for d, v in m_bends]
     stroke = max(3, int(2.4 * scale))
     if p_coords:
         _draw_elegant_line(img, p_coords, color=LINE_GREEN, bottom=cb, stroke=stroke, fill_alpha=32)
@@ -1027,7 +1050,9 @@ def render_state_dashboard_b2(
             )
         spark = (x0 + 16 * scale, y0 + 92 * scale, x1 - 16 * scale, y1 - 16 * scale)
         if series:
-            coords = [xy(dd, score_to_100(vv), spark) for dd, vv in series]
+            coords = [
+                xy(dd, score_to_100(vv), spark) for dd, vv in _series_bends(series)
+            ]
             _draw_elegant_line(
                 img,
                 coords,
@@ -1134,4 +1159,259 @@ def render_state_dashboard_b2(
 
     rgb = Image.new("RGB", img.size, BG)
     rgb.paste(img, mask=img.split()[3])
+    return _to_png(rgb)
+
+
+LINE_CASH = (52, 199, 89)
+LINE_DEBT = (255, 69, 58)
+LINE_NET = (10, 132, 255)
+
+
+def _fmt_axis_money(v: float) -> str:
+    av = abs(v)
+    if av >= 1_000_000:
+        return f"{v / 1_000_000:.1f}M".replace(".0M", "M")
+    if av >= 1000:
+        return f"{v / 1000:.0f}k"
+    return f"{v:.0f}"
+
+
+def _series_bends(series: list[tuple[int, float]]) -> list[tuple[int, float]]:
+    """Вершины, где линия меняет наклон (плато, пики, первый и последний)."""
+    if len(series) <= 2:
+        return list(series)
+    out = [series[0]]
+    for i in range(1, len(series) - 1):
+        y0 = series[i - 1][1]
+        y1 = series[i][1]
+        y2 = series[i + 1][1]
+        if abs((y1 - y0) - (y2 - y1)) > 1e-6:
+            out.append(series[i])
+    if out[-1] != series[-1]:
+        out.append(series[-1])
+    return out
+
+
+def render_finance_dashboard(
+    *,
+    year: int,
+    month: int,
+    cash_by_day: dict[int, float],
+    debt_by_day: dict[int, float],
+    latest_cash: float | None = None,
+    latest_debt: float | None = None,
+) -> bytes:
+    """Карточка финансов в формате самочувствия: выходные, дни недели, точки на изгибах."""
+    import calendar as cal
+
+    scale = 2
+    width, height = 900, 680
+    w, h = width * scale, height * scale
+    img = Image.new("RGBA", (w, h), (*BG, 255))
+    draw = ImageDraw.Draw(img)
+    pad = 28 * scale
+    rad = 28 * scale
+
+    draw.rounded_rectangle(
+        (pad, pad, w - pad, h - pad),
+        radius=rad,
+        fill=(*CARD, 255),
+    )
+
+    ru_months = (
+        "Январь",
+        "Февраль",
+        "Март",
+        "Апрель",
+        "Май",
+        "Июнь",
+        "Июль",
+        "Август",
+        "Сентябрь",
+        "Октябрь",
+        "Ноябрь",
+        "Декабрь",
+    )
+    f_title = _load_sf_font(26 * scale, True)
+    f_sub = _load_sf_font(14 * scale)
+    f_card_t = _load_sf_font(13 * scale)
+    f_card_v = _load_sf_font(22 * scale, True)
+    f_axis = _load_sf_font(11 * scale)
+    f_wd = _load_sf_font(11 * scale)
+    f_leg = _load_sf_font(13 * scale)
+
+    x0 = pad + 22 * scale
+    y0 = pad + 18 * scale
+    draw.text((x0, y0), "Финансы", font=f_title, fill=TITLE)
+    draw.text((x0, y0 + 36 * scale), f"{ru_months[month - 1]} {year}", font=f_sub, fill=SECONDARY)
+
+    days = cal.monthrange(year, month)[1]
+    cash_now = latest_cash
+    debt_now = latest_debt
+    net_now = (
+        None if cash_now is None or debt_now is None else cash_now - debt_now
+    )
+
+    def _money_label(v: float | None) -> str:
+        if v is None:
+            return "—"
+        n = int(round(v))
+        sign = "−" if n < 0 else ""
+        return f"{sign}{abs(n):,}".replace(",", " ") + " ₽"
+
+    cards = [
+        ("Деньги", _money_label(cash_now), LINE_CASH),
+        ("Долги", _money_label(debt_now), LINE_DEBT),
+        ("Чистыми", _money_label(net_now), LINE_NET),
+    ]
+    card_y = y0 + 70 * scale
+    card_h = 72 * scale
+    gap = 12 * scale
+    inner_w = w - 2 * pad - 44 * scale
+    card_w = (inner_w - 2 * gap) / 3
+    for i, (lab, val, col) in enumerate(cards):
+        cx = x0 + i * (card_w + gap)
+        draw.rounded_rectangle(
+            (cx, card_y, cx + card_w, card_y + card_h),
+            radius=16 * scale,
+            fill=(248, 248, 250, 255),
+            outline=GRID,
+            width=2,
+        )
+        draw.rounded_rectangle(
+            (
+                cx + 12 * scale,
+                card_y + 14 * scale,
+                cx + 12 * scale + 6 * scale,
+                card_y + card_h - 14 * scale,
+            ),
+            radius=4 * scale,
+            fill=col,
+        )
+        draw.text((cx + 28 * scale, card_y + 14 * scale), lab, font=f_card_t, fill=SECONDARY)
+        draw.text((cx + 28 * scale, card_y + 34 * scale), val, font=f_card_v, fill=TITLE)
+
+    chart_top = card_y + card_h + 36 * scale
+    chart_bottom = h - pad - 72 * scale
+    chart_left = x0 + 40 * scale
+    chart_right = w - pad - 22 * scale
+
+    net_by_day: dict[int, float] = {}
+    for day in set(cash_by_day) | set(debt_by_day):
+        cash_v = cash_by_day.get(day)
+        debt_v = debt_by_day.get(day, 0.0 if cash_v is not None else None)
+        if cash_v is None:
+            continue
+        net_by_day[day] = cash_v - float(debt_v or 0.0)
+
+    lx = chart_left
+    for name, col in (("Деньги", LINE_CASH), ("Долги", LINE_DEBT), ("Чистыми", LINE_NET)):
+        draw.rounded_rectangle(
+            (lx, chart_top - 26 * scale, lx + 16 * scale, chart_top - 16 * scale),
+            radius=2,
+            fill=col,
+        )
+        draw.text((lx + 22 * scale, chart_top - 30 * scale), name, font=f_leg, fill=SECONDARY)
+        lx += 140 * scale
+
+    values = list(cash_by_day.values()) + list(debt_by_day.values()) + list(net_by_day.values())
+    day_span = (chart_right - chart_left) / max(days - 1, 1)
+
+    for day in range(1, days + 1):
+        if date(year, month, day).weekday() < 5:
+            continue
+        x = chart_left + (day - 1) * day_span
+        draw.rectangle(
+            (x - day_span * 0.45, chart_top, x + day_span * 0.45, chart_bottom),
+            fill=(236, 236, 240, 255),
+        )
+
+    if not values:
+        draw.text(
+            ((chart_left + chart_right) / 2 - 80 * scale, (chart_top + chart_bottom) / 2),
+            "Пока нет данных",
+            font=_load_sf_font(18 * scale),
+            fill=SECONDARY,
+        )
+    else:
+        vmin = min(0.0, min(values))
+        vmax = max(values)
+        if abs(vmax - vmin) < 1:
+            vmax = vmin + 1
+        pad_v = (vmax - vmin) * 0.08
+        vmin -= pad_v
+        vmax += pad_v
+        span = vmax - vmin
+
+        for i in range(5):
+            gy = chart_top + (chart_bottom - chart_top) * i / 4
+            x = chart_left
+            while x < chart_right:
+                draw.line(
+                    (x, gy, min(x + 4 * scale, chart_right), gy),
+                    fill=GRID,
+                    width=max(1, scale // 2),
+                )
+                x += 8 * scale
+            lab = _fmt_axis_money(vmax - span * i / 4)
+            tw = draw.textlength(lab, font=f_axis)
+            draw.text((chart_left - tw - 8 * scale, gy - 7 * scale), lab, font=f_axis, fill=SECONDARY)
+
+        def _to_xy(series: list[tuple[int, float]]) -> list[tuple[float, float]]:
+            pts: list[tuple[float, float]] = []
+            for day, val in series:
+                x = chart_left + (day - 1) * day_span
+                y = chart_bottom - (val - vmin) / span * (chart_bottom - chart_top)
+                pts.append((x, y))
+            return pts
+
+        def _daily(by_day: dict[int, float]) -> list[tuple[int, float]]:
+            return [(d, by_day[d]) for d in sorted(by_day)]
+
+        def _draw_series(by_day: dict[int, float], color: tuple[int, int, int], fill_alpha: int) -> None:
+            daily = _daily(by_day)
+            if not daily:
+                return
+            bends = _series_bends(daily)
+            coords = _to_xy(bends)
+            if len(coords) >= 2:
+                _draw_elegant_line(
+                    img,
+                    coords,
+                    color=color,
+                    bottom=chart_bottom,
+                    stroke=max(3, int(2.4 * scale)),
+                    fill_alpha=fill_alpha,
+                )
+            overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            od = ImageDraw.Draw(overlay)
+            r = max(4, int(1.8 * scale))
+            ring = max(2, int(0.8 * scale))
+            for x, y in coords:
+                od.ellipse(
+                    (x - r - ring, y - r - ring, x + r + ring, y + r + ring),
+                    fill=(255, 255, 255, 255),
+                )
+                od.ellipse((x - r, y - r, x + r, y + r), fill=(*color, 255))
+            img.alpha_composite(overlay)
+
+        _draw_series(cash_by_day, LINE_CASH, 28)
+        _draw_series(debt_by_day, LINE_DEBT, 20)
+        _draw_series(net_by_day, LINE_NET, 22)
+
+    draw = ImageDraw.Draw(img)
+    for day in range(1, days + 1):
+        x = chart_left + (day - 1) * day_span
+        lab = str(day)
+        wd = WD_SHORT[date(year, month, day).weekday()]
+        is_weekend = date(year, month, day).weekday() >= 5
+        label_fill = CAL_RED if is_weekend else SECONDARY
+        wd_fill = CAL_RED if is_weekend else (174, 174, 178)
+        tw = draw.textlength(lab, font=f_axis)
+        draw.text((x - tw / 2, chart_bottom + 8 * scale), lab, font=f_axis, fill=label_fill)
+        tw2 = draw.textlength(wd, font=f_wd)
+        draw.text((x - tw2 / 2, chart_bottom + 22 * scale), wd, font=f_wd, fill=wd_fill)
+
+    rgb = Image.new("RGB", img.size, BG)
+    rgb.paste(img, mask=img.split()[3] if img.mode == "RGBA" else None)
     return _to_png(rgb)

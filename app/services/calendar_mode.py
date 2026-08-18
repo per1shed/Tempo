@@ -43,17 +43,17 @@ def next_calendar_mode(current: str) -> str:
 
 def calendar_mode_label(stored: str, d: date | None = None) -> str:
     eff = effective_calendar_mode(stored, d)
-    eff_ru = "учебное время" if eff == "term" else "каникулы"
+    eff_ru = "учёба" if eff == "term" else "каникулы"
     if stored == "auto":
-        return f"авто → {eff_ru}"
+        return f"авто · {eff_ru}"
     if stored == "term":
-        return "учебное время (вручную)"
-    return "каникулы (вручную)"
+        return "учёба"
+    return "каникулы"
 
 
 def calendar_button_label(stored: str) -> str:
     if stored == "auto":
-        return "Календарь: авто"
+        return "Расписание · авто"
     if stored == "term":
-        return "Календарь: учёба"
-    return "Календарь: каникулы"
+        return "Расписание · учёба"
+    return "Расписание · каникулы"
