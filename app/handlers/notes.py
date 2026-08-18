@@ -320,8 +320,6 @@ async def on_browsing_text(
 ) -> None:
     data = await state.get_data()
     screen = data.get("notes_screen")
-    text = message.text or ""
-
     if screen == "list":
         folder_id = data.get("notes_folder_id")
         if folder_id is None:
@@ -330,7 +328,7 @@ async def on_browsing_text(
         result = await notes_svc.create_note(
             session,
             db_user.id,
-            text=text,
+            text=notes_svc.message_html(message),
             category_id=int(folder_id),
         )
         if isinstance(result, str):
@@ -340,7 +338,7 @@ async def on_browsing_text(
         await _show_note(message, note, user_settings, state)
         return
 
-    result = await notes_svc.create_category(session, db_user.id, text)
+    result = await notes_svc.create_category(session, db_user.id, message.text or "")
     if isinstance(result, str):
         await message.answer(result)
         return
@@ -365,7 +363,7 @@ async def on_viewing_append(
         await state.clear()
         return
     result = await notes_svc.append_note_text(
-        session, db_user.id, int(note_id), message.text or ""
+        session, db_user.id, int(note_id), notes_svc.message_html(message)
     )
     if isinstance(result, str):
         await message.answer(result)
@@ -384,7 +382,7 @@ async def on_editing_replace(
         await state.clear()
         return
     result = await notes_svc.replace_note_text(
-        session, db_user.id, int(note_id), message.text or ""
+        session, db_user.id, int(note_id), notes_svc.message_html(message)
     )
     if isinstance(result, str):
         await message.answer(result)

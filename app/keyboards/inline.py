@@ -264,8 +264,9 @@ def notes_list_kb(
 
 
 def notes_svc_label(note) -> str:
-    text = (getattr(note, "text", "") or "").strip()
-    title = text.splitlines()[0].strip() if text else "Без названия"
+    from app.services.notes import note_plain, split_title_body
+
+    title, _ = split_title_body(note_plain(getattr(note, "text", "") or ""))
     if not title:
         title = "Без названия"
     encoded = title.encode("utf-8")

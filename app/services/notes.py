@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import html
+import re
 from datetime import date, datetime, timedelta
 
+from aiogram.types import Message
+from aiogram.utils.text_decorations import html_decoration
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -15,6 +18,60 @@ MAX_CATEGORIES = 16
 MAX_NOTE_LEN = 3500
 MAX_CAT_NAME = 40
 PAGE_SIZE = 8
+
+_TG_EMOJI_RE = re.compile(
+    r'<tg-emoji emoji-id="[^"]*">([\s\S]*?)</tg-emoji>',
+    re.IGNORECASE,
+)
+
+
+def message_html(message: Message) -> str:
+    """Текст сообщения с премиум-стикерами как <tg-emoji>."""
+    text = message.text or ""
+    entities = list(message.entities or [])
+    return html_decoration.unparse(text, entities).strip()
+
+
+def note_plain(text: str) -> str:
+    """Видимый текст без HTML — для кнопок и копирования."""
+    raw = text or ""
+    raw = _TG_EMOJI_RE.sub(r"\1", raw)
+    raw = re.sub(r"</?(?:b|i|u|s|code|pre|tg-emoji)(?:\s[^>]*)?>", "", raw, flags=re.I)
+    raw = re.sub(r"<a\s[^>]*>|</a>", "", raw, flags=re.I)
+    return html.unescape(raw)
+
+
+def _looks_html(text: str) -> bool:
+    raw = text or ""
+    return (
+        "<tg-emoji" in raw
+        or "&lt;" in raw
+        or "&amp;" in raw
+        or "&gt;" in raw
+        or "<b>" in raw
+        or "<i>" in raw
+        or "<code>" in raw
+    )
+
+
+def note_html(text: str) -> str:
+    """Фрагмент заметки для ParseMode.HTML."""
+    raw = text or ""
+    if _looks_html(raw):
+        return raw
+    return html.escape(raw)
+
+
+def _clip_html(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    last_lt = cut.rfind("<")
+    last_gt = cut.rfind(">")
+    if last_lt > last_gt:
+        cut = cut[:last_lt]
+    return cut
+
 
 _MONTHS = (
     "янв",
@@ -63,7 +120,7 @@ def format_when(dt: datetime | date | None) -> str:
 
 
 def note_btn_label(note: Note) -> str:
-    title, _ = split_title_body(note.text)
+    title, _ = split_title_body(note_plain(note.text))
     encoded = title.encode("utf-8")
     if len(encoded) <= 48:
         return title
@@ -166,7 +223,7 @@ async def create_note(
     clean = (text or "").strip()
     if not clean:
         return "Пустая заметка"
-    clean = clean[:MAX_NOTE_LEN]
+    clean = _clip_html(clean, MAX_NOTE_LEN)
     cat = await get_category(session, user_id, category_id)
     if not cat:
         return "Папка не найдена"
@@ -196,8 +253,9 @@ async def append_note_text(
     note = await get_note(session, user_id, note_id)
     if not note:
         return "Не найдено"
-    merged = (note.text.rstrip() + "\n" + add).strip()
-    note.text = merged[:MAX_NOTE_LEN]
+    base = note.text if _looks_html(note.text) else html.escape(note.text)
+    merged = (base.rstrip() + "\n" + add).strip()
+    note.text = _clip_html(merged, MAX_NOTE_LEN)
     note.updated_at = now()
     await session.flush()
     return note
@@ -215,7 +273,7 @@ async def replace_note_text(
     note = await get_note(session, user_id, note_id)
     if not note:
         return "Не найдено"
-    note.text = clean[:MAX_NOTE_LEN]
+    note.text = _clip_html(clean, MAX_NOTE_LEN)
     note.updated_at = now()
     await session.flush()
     return note
@@ -389,12 +447,12 @@ def _divider_for_note(title: str, body: str, when: str) -> str:
 def note_detail_text(note: Note) -> str:
     title, body = split_title_body(note.text)
     when = format_when(note.updated_at or note.created_on)
-    lines = [f"{ce('book')}<b>{html.escape(title)}</b>"]
+    lines = [f"{ce('book')}<b>{note_html(title)}</b>"]
     if body:
-        lines += ["", html.escape(body)]
+        lines += ["", note_html(body)]
     if when:
         lines += [
-            _divider_for_note(title, body, when),
+            _divider_for_note(note_plain(title), note_plain(body), when),
             f"{ce('clock')}{html.escape(when)}",
         ]
     lines += ["", "Напишите — допишу."]
@@ -405,7 +463,7 @@ def note_detail_text(note: Note) -> str:
 
 
 def prompt_edit_text(note: Note) -> str:
-    raw = (note.text or "").strip()
+    raw = note_plain(note.text).strip()
     body = html.escape(raw)
     if len(body) > 3000:
         body = body[:2997] + "…"
@@ -417,7 +475,7 @@ def prompt_edit_text(note: Note) -> str:
 
 
 def confirm_delete_note_text(note: Note) -> str:
-    title, _ = split_title_body(note.text)
+    title, _ = split_title_body(note_plain(note.text))
     return (
         f"{ce('trash')}<b>Удалить заметку?</b>\n\n"
         f"«{html.escape(title)}» исчезнет."
