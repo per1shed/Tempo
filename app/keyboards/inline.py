@@ -1,7 +1,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from app.utils.custom_emoji import icon_id, icon_label, icon_only_text
+from app.utils.custom_emoji import icon_id, icon_label
 
 
 def _btn(
@@ -22,14 +22,6 @@ def _btn(
     return InlineKeyboardButton(text=text, callback_data=callback_data)
 
 
-def _icon_btn(callback_data: str, icon: str) -> InlineKeyboardButton:
-    return InlineKeyboardButton(
-        text=icon_only_text(),
-        callback_data=callback_data,
-        icon_custom_emoji_id=icon_id(icon),
-    )
-
-
 def _append_home(b: InlineKeyboardBuilder) -> None:
     b.row(_btn("Главное меню", "menu:home", "home"))
 
@@ -38,7 +30,6 @@ def _append_main_nav(b: InlineKeyboardBuilder) -> None:
     """Разделы только для главного меню."""
     b.row(_btn("Состояние", "ci:hub", "stats"))
     b.row(_btn("Финансы", "fin:hub", "money"))
-    b.row(_btn("Заметки", "notes:hub", "book"))
     b.row(_btn("Секундомер", "menu:stopwatch", "timer"))
 
 
@@ -234,106 +225,5 @@ def finance_month_kb(year: int, month: int) -> InlineKeyboardMarkup:
     )
     b.row(_btn("Обновить баланс", "fin:update", "refresh"))
     b.row(_btn("Главное меню", "menu:home", "home"))
-    return b.as_markup()
-
-
-def notes_list_kb(
-    notes: list,
-    *,
-    folder_id: int,
-    page: int,
-    pages: int,
-) -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    for n in notes:
-        b.row(_btn(notes_svc_label(n), f"notes:open:{n.id}"))
-    if pages > 1:
-        prefix = f"notes:f:{folder_id}"
-        prev_p = max(0, page - 1)
-        next_p = min(pages - 1, page + 1)
-        b.row(
-            _btn("◀", f"{prefix}:{prev_p}"),
-            _btn(f"{page + 1}/{pages}", f"{prefix}:{page}"),
-            _btn("▶", f"{prefix}:{next_p}"),
-        )
-    b.row(
-        _btn("« Папки", "notes:hub", "folder"),
-        _btn("Главное меню", "menu:home", "home"),
-    )
-    return b.as_markup()
-
-
-def notes_svc_label(note) -> str:
-    from app.services.notes import note_plain, split_title_body
-
-    title, _ = split_title_body(note_plain(getattr(note, "text", "") or ""))
-    if not title:
-        title = "Без названия"
-    encoded = title.encode("utf-8")
-    if len(encoded) <= 48:
-        return title
-    cut = title
-    while cut and len(cut.encode("utf-8")) > 45:
-        cut = cut[:-1]
-    return cut + "…"
-
-
-def notes_folders_kb(categories: list, cat_counts: dict[int, int]) -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    for cat in categories[:16]:
-        n = cat_counts.get(cat.id, 0)
-        label = f"{cat.name} · {n}" if n else cat.name
-        b.row(
-            _btn(label, f"notes:f:{cat.id}"),
-            _icon_btn(f"notes:rmf:{cat.id}", "trash"),
-        )
-    b.row(
-        _btn("Добавить папку", "notes:add_folder", "plus"),
-        _btn("Главное меню", "menu:home", "home"),
-    )
-    return b.as_markup()
-
-
-def notes_note_kb(
-    note_id: int,
-    *,
-    list_back: str = "notes:hub",
-) -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    b.row(
-        _btn("Изменить", f"notes:edit:{note_id}", "edit"),
-        _btn("Удалить", f"notes:del:{note_id}", "trash"),
-    )
-    b.row(
-        _btn("« К папке", list_back, "book"),
-        _btn("Главное меню", "menu:home", "home"),
-    )
-    return b.as_markup()
-
-
-def notes_edit_kb(note_id: int) -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    b.row(_btn("Отмена", f"notes:open:{note_id}", "cross"))
-    return b.as_markup()
-
-
-def notes_move_kb(
-    note_id: int, categories: list, *, current_id: int | None
-) -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    for cat in categories:
-        if cat.id == current_id:
-            continue
-        b.row(_btn(cat.name, f"notes:to:{note_id}:{cat.id}", "folder"))
-    b.row(_btn("Отмена", f"notes:open:{note_id}", "cross"))
-    return b.as_markup()
-
-
-def notes_confirm_kb(ok: str, cancel: str, *, ok_text: str = "Удалить") -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    b.row(
-        _btn(ok_text, ok, "cross"),
-        _btn("Отмена", cancel, "check"),
-    )
     return b.as_markup()
 

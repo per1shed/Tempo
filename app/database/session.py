@@ -85,24 +85,8 @@ async def init_db() -> None:
                 "DROP CONSTRAINT IF EXISTS uq_state_user_day_period"
             )
         )
-        await conn.execute(
-            text(
-                "ALTER TABLE notes "
-                "ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN DEFAULT FALSE"
-            )
-        )
-        await conn.execute(
-            text(
-                "ALTER TABLE notes DROP CONSTRAINT IF EXISTS notes_category_id_fkey"
-            )
-        )
-        await conn.execute(
-            text(
-                "ALTER TABLE notes ADD CONSTRAINT notes_category_id_fkey "
-                "FOREIGN KEY (category_id) REFERENCES note_categories(id) "
-                "ON DELETE CASCADE"
-            )
-        )
+        await conn.execute(text("DROP TABLE IF EXISTS notes CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS note_categories CASCADE"))
 
 
 async def close_db() -> None:
