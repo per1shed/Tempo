@@ -243,20 +243,24 @@ def month_series_filled(
     return cash_by, debt_by
 
 
+def _balance_summary_lines(cash: float, debt: float) -> list[str]:
+    lines = [
+        f"Баланс: <b>{format_money(cash)}</b>",
+        f"Долги: <b>{format_money(debt)}</b>",
+    ]
+    net = cash - debt
+    if abs(cash - net) >= 0.5:
+        lines.append(f"Баланс с учётом долгов: <b>{format_money(net)}</b>")
+    return lines
+
+
 def hub_text(balance: Balance | None, *, today_logged: bool) -> str:
     lines = [
         f"{ce('money')}<b>Финансы</b>",
         "",
     ]
     if balance:
-        net = balance.cash - balance.debt
-        lines.extend(
-            [
-                f"Деньги: <b>{format_money(balance.cash)}</b>",
-                f"Долги: <b>{format_money(balance.debt)}</b>",
-                f"Чистыми: <b>{format_money(net)}</b>",
-            ]
-        )
+        lines.extend(_balance_summary_lines(balance.cash, balance.debt))
         if balance.updated_on:
             lines.append(f"Обновлено: {balance.updated_on.strftime('%d.%m.%Y')}")
     else:
@@ -269,7 +273,7 @@ def hub_text(balance: Balance | None, *, today_logged: bool) -> str:
     lines.extend(
         [
             "",
-            "Вечером после самочувствия бот спросит деньги и долги.",
+            "Вечером после самочувствия бот спросит баланс и долги.",
         ]
     )
     return "\n".join(lines)
@@ -296,7 +300,7 @@ def prompt_evening_intro_text(
         lines.append("")
     if balance:
         lines.append(
-            f"Сейчас: деньги {format_money(balance.cash)} · долги {format_money(balance.debt)}"
+            f"Сейчас: баланс {format_money(balance.cash)} · долги {format_money(balance.debt)}"
         )
         lines.append("")
     lines.extend(
@@ -314,22 +318,15 @@ def prompt_choose_text(*, balance: Balance | None = None) -> str:
         "",
     ]
     if balance:
-        net = balance.cash - balance.debt
-        lines.extend(
-            [
-                f"Деньги: <b>{format_money(balance.cash)}</b>",
-                f"Долги: <b>{format_money(balance.debt)}</b>",
-                f"Чистыми: <b>{format_money(net)}</b>",
-                "",
-            ]
-        )
+        lines.extend(_balance_summary_lines(balance.cash, balance.debt))
+        lines.append("")
     lines.append("Что изменить?")
     return "\n".join(lines)
 
 
 def prompt_cash_text(*, balance: Balance | None = None) -> str:
     lines = [
-        f"{ce('money')}<b>Финансы · деньги</b>",
+        f"{ce('money')}<b>Финансы · баланс</b>",
         "",
     ]
     if balance:
@@ -337,7 +334,7 @@ def prompt_cash_text(*, balance: Balance | None = None) -> str:
         lines.append("")
     lines.extend(
         [
-            "Сколько сейчас <b>денег</b> (наличные + счета)?",
+            "Какой сейчас <b>баланс</b> (наличные + счета)?",
             "",
             "Пример: <code>45 000</code>",
         ]
@@ -354,7 +351,7 @@ def prompt_debt_text(*, cash: float | None = None, debt: float | None = None) ->
         lines.append(f"Сейчас: <b>{format_money(debt)}</b>")
         lines.append("")
     elif cash is not None:
-        lines.append(f"Деньги: <b>{format_money(cash)}</b>")
+        lines.append(f"Баланс: <b>{format_money(cash)}</b>")
         lines.append("")
     lines.extend(
         [
@@ -367,14 +364,14 @@ def prompt_debt_text(*, cash: float | None = None, debt: float | None = None) ->
 
 
 def saved_text(*, cash: float, debt: float) -> str:
-    net = cash - debt
-    return (
-        f"{ce('check')}<b>Финансы сохранены</b>\n\n"
-        f"Деньги: <b>{format_money(cash)}</b>\n"
-        f"Долги: <b>{format_money(debt)}</b>\n"
-        f"Чистыми: <b>{format_money(net)}</b>\n\n"
-        "Баланс обновлён в постоянной памяти."
-    )
+    lines = [
+        f"{ce('check')}<b>Финансы сохранены</b>",
+        "",
+        *_balance_summary_lines(cash, debt),
+        "",
+        "Баланс обновлён в постоянной памяти.",
+    ]
+    return "\n".join(lines)
 
 
 def month_dashboard_png(

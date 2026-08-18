@@ -207,7 +207,7 @@ def finance_cancel_kb() -> InlineKeyboardMarkup:
 
 def finance_choose_kb(*, allow_skip: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(_btn("Изменить деньги", "fin:edit:cash", "money"))
+    b.row(_btn("Изменить баланс", "fin:edit:cash", "money"))
     b.row(_btn("Изменить долги", "fin:edit:debt", "money"))
     if allow_skip:
         b.row(_btn("Пропустить", "fin:skip", "cross"))

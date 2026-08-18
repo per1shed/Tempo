@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import date, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -1168,12 +1169,49 @@ LINE_NET = (10, 132, 255)
 
 
 def _fmt_axis_money(v: float) -> str:
+    if abs(v) < 0.5:
+        return "0"
     av = abs(v)
+    sign = "−" if v < 0 else ""
     if av >= 1_000_000:
-        return f"{v / 1_000_000:.1f}M".replace(".0M", "M")
+        body = f"{av / 1_000_000:.1f}M".replace(".0M", "M")
+        return f"{sign}{body}"
     if av >= 1000:
-        return f"{v / 1000:.0f}k"
-    return f"{v:.0f}"
+        return f"{sign}{av / 1000:.0f}k"
+    return f"{sign}{av:.0f}"
+
+
+def _money_axis_ticks(vmin: float, vmax: float, *, max_ticks: int = 6) -> list[float]:
+    """Деления оси Y с обязательным нулём, если он в диапазоне."""
+    span = vmax - vmin
+    if span <= 0:
+        return [0.0]
+    raw = span / max(max_ticks - 1, 1)
+    mag = 10 ** math.floor(math.log10(raw)) if raw > 0 else 1.0
+    step = mag * 10
+    for m in (1, 2, 2.5, 5, 10):
+        cand = m * mag
+        if span / cand <= max_ticks - 1:
+            step = cand
+            break
+    start = math.floor(vmin / step) * step
+    ticks: list[float] = []
+    v = start
+    while v <= vmax + step * 0.01:
+        ticks.append(round(v, 8))
+        v += step
+    if vmin <= 0 <= vmax and all(abs(t) >= 0.5 for t in ticks):
+        ticks.append(0.0)
+        ticks = sorted(ticks)
+    # убрать почти-дубли
+    cleaned: list[float] = []
+    for t in ticks:
+        if not cleaned or abs(t - cleaned[-1]) > step * 0.15:
+            cleaned.append(t)
+    if vmin <= 0 <= vmax and all(abs(t) >= 0.5 for t in cleaned):
+        cleaned.append(0.0)
+        cleaned.sort()
+    return cleaned
 
 
 def _series_bends(series: list[tuple[int, float]]) -> list[tuple[int, float]]:
@@ -1238,7 +1276,6 @@ def render_finance_dashboard(
     f_card_v = _load_sf_font(22 * scale, True)
     f_axis = _load_sf_font(11 * scale)
     f_wd = _load_sf_font(11 * scale)
-    f_leg = _load_sf_font(13 * scale)
 
     x0 = pad + 22 * scale
     y0 = pad + 18 * scale
@@ -1251,6 +1288,11 @@ def render_finance_dashboard(
     net_now = (
         None if cash_now is None or debt_now is None else cash_now - debt_now
     )
+    show_net_now = (
+        cash_now is not None
+        and net_now is not None
+        and abs(cash_now - net_now) >= 0.5
+    )
 
     def _money_label(v: float | None) -> str:
         if v is None:
@@ -1260,15 +1302,16 @@ def render_finance_dashboard(
         return f"{sign}{abs(n):,}".replace(",", " ") + " ₽"
 
     cards = [
-        ("Деньги", _money_label(cash_now), LINE_CASH),
+        ("Баланс", _money_label(cash_now), LINE_CASH),
         ("Долги", _money_label(debt_now), LINE_DEBT),
-        ("Чистыми", _money_label(net_now), LINE_NET),
     ]
+    if show_net_now:
+        cards.append(("Баланс с учётом долгов", _money_label(net_now), LINE_NET))
     card_y = y0 + 70 * scale
-    card_h = 72 * scale
+    card_h = 80 * scale
     gap = 12 * scale
     inner_w = w - 2 * pad - 44 * scale
-    card_w = (inner_w - 2 * gap) / 3
+    card_w = (inner_w - gap * (len(cards) - 1)) / len(cards)
     for i, (lab, val, col) in enumerate(cards):
         cx = x0 + i * (card_w + gap)
         draw.rounded_rectangle(
@@ -1288,10 +1331,27 @@ def render_finance_dashboard(
             radius=4 * scale,
             fill=col,
         )
-        draw.text((cx + 28 * scale, card_y + 14 * scale), lab, font=f_card_t, fill=SECONDARY)
-        draw.text((cx + 28 * scale, card_y + 34 * scale), val, font=f_card_v, fill=TITLE)
+        tx = cx + 28 * scale
+        max_lab_w = card_w - 40 * scale
+        words = lab.split()
+        wrapped: list[str] = []
+        cur = ""
+        for word in words:
+            trial = f"{cur} {word}".strip()
+            if draw.textlength(trial, font=f_card_t) <= max_lab_w or not cur:
+                cur = trial
+            else:
+                wrapped.append(cur)
+                cur = word
+        if cur:
+            wrapped.append(cur)
+        ly = card_y + 10 * scale
+        for line in wrapped:
+            draw.text((tx, ly), line, font=f_card_t, fill=SECONDARY)
+            ly += 16 * scale
+        draw.text((tx, card_y + 44 * scale), val, font=f_card_v, fill=TITLE)
 
-    chart_top = card_y + card_h + 36 * scale
+    chart_top = card_y + card_h + 16 * scale
     chart_bottom = h - pad - 72 * scale
     chart_left = x0 + 40 * scale
     chart_right = w - pad - 22 * scale
@@ -1302,17 +1362,9 @@ def render_finance_dashboard(
         debt_v = debt_by_day.get(day, 0.0 if cash_v is not None else None)
         if cash_v is None:
             continue
-        net_by_day[day] = cash_v - float(debt_v or 0.0)
-
-    lx = chart_left
-    for name, col in (("Деньги", LINE_CASH), ("Долги", LINE_DEBT), ("Чистыми", LINE_NET)):
-        draw.rounded_rectangle(
-            (lx, chart_top - 26 * scale, lx + 16 * scale, chart_top - 16 * scale),
-            radius=2,
-            fill=col,
-        )
-        draw.text((lx + 22 * scale, chart_top - 30 * scale), name, font=f_leg, fill=SECONDARY)
-        lx += 140 * scale
+        net_v = cash_v - float(debt_v or 0.0)
+        if abs(cash_v - net_v) >= 0.5:
+            net_by_day[day] = net_v
 
     values = list(cash_by_day.values()) + list(debt_by_day.values()) + list(net_by_day.values())
     day_span = (chart_right - chart_left) / max(days - 1, 1)
@@ -1334,28 +1386,35 @@ def render_finance_dashboard(
             fill=SECONDARY,
         )
     else:
-        vmin = min(0.0, min(values))
-        vmax = max(values)
+        data_min = min(values)
+        data_max = max(values)
+        vmin = min(0.0, data_min)
+        vmax = max(0.0, data_max)
         if abs(vmax - vmin) < 1:
             vmax = vmin + 1
         pad_v = (vmax - vmin) * 0.08
-        vmin -= pad_v
         vmax += pad_v
+        if vmin < 0:
+            vmin -= pad_v
         span = vmax - vmin
 
-        for i in range(5):
-            gy = chart_top + (chart_bottom - chart_top) * i / 4
+        ticks = _money_axis_ticks(vmin, vmax)
+        for val in ticks:
+            gy = chart_bottom - (val - vmin) / span * (chart_bottom - chart_top)
             x = chart_left
+            is_zero = abs(val) < 0.5
+            line_fill = (174, 174, 178) if is_zero else GRID
+            line_w = max(2, scale) if is_zero else max(1, scale // 2)
             while x < chart_right:
                 draw.line(
-                    (x, gy, min(x + 4 * scale, chart_right), gy),
-                    fill=GRID,
-                    width=max(1, scale // 2),
+                    (x, gy, min(x + (6 * scale if is_zero else 4 * scale), chart_right), gy),
+                    fill=line_fill,
+                    width=line_w,
                 )
                 x += 8 * scale
-            lab = _fmt_axis_money(vmax - span * i / 4)
+            lab = _fmt_axis_money(val)
             tw = draw.textlength(lab, font=f_axis)
-            draw.text((chart_left - tw - 8 * scale, gy - 7 * scale), lab, font=f_axis, fill=SECONDARY)
+            draw.text((chart_left - tw - 8 * scale, gy - 7 * scale), lab, font=f_axis, fill=TITLE if is_zero else SECONDARY)
 
         def _to_xy(series: list[tuple[int, float]]) -> list[tuple[float, float]]:
             pts: list[tuple[float, float]] = []
